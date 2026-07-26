@@ -66,3 +66,18 @@ The API deliberately has no wallet-address, chain, bridge, export, or withdrawal
 - **Pension contracts:** users may create 2/5/10-year contracts at a 3%/5%/10% voluntary monthly contribution rate. Each recorded contribution allocates 10% to an immediate **internal payout entitlement** and 90% to capitalized vault savings at the contract rate (8% annual by default, compounded monthly in the projection). `POST /me/pension-contracts/{id}/close` returns all remaining principal internally with zero penalty; already recorded immediate payouts remain paid.
 
 Quotes are inputs from an approved, auditable oracle process—not investment advice or a promise of a market price. The pension projection is a mathematical projection, not a guarantee of return. As in phase 1, none of these modules exposes an external wallet, token withdrawal, bridge, or cash-out route.
+
+## Phase 3 — BaaS boundary, multi-currency, and Academy
+
+Apply `supabase/migrations/20260726020000_baas_wallet_academy.sql` after the preceding migrations.
+
+- **BaaS:** The provider-neutral ingress `POST /baas/webhooks/{partner_slug}` accepts only HMAC-SHA256-signed, idempotent event envelopes. Keep the per-partner HMAC map in the `BAAS_WEBHOOK_SECRETS` secret-manager variable; never place it in source control. Admins register active partners and provider-provisioned accounts. `BAAS_DATA_KEY` is a Fernet key used only to encrypt an IBAN at rest. The API records provider account references and technical fiat credits/debits; a licensed partner remains responsible for account provisioning, KYC/AML, payment execution, and regulatory obligations.
+- **Multi-currency:** Users opt in with `/me/wallet/settings`, view technical balances at `/me/wallet/balances`, and can convert only against a server-held current FX quote. Each conversion is an append-only debit/credit ledger pair. No partner callback can issue or withdraw a TRR vault partition.
+- **Academy:** `frontend/` is a dependency-free responsive Academy view. The API offers a seeded pattern library and five-year filtered OHLC history for GOLD, OIL, NATGAS, SILVER, BTC, USD, JPY, PLATINUM, and ETH. Historical candles are imported by an authenticated administrator and have strict OHLC validation; the UI explicitly presents education, not a trading signal or return promise.
+
+Required BaaS secret configuration:
+```sh
+export BAAS_DATA_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+export BAAS_WEBHOOK_SECRETS="$(python -c 'import json,secrets; print(json.dumps({"licensed-provider": secrets.token_urlsafe(48)}))')"
+```
+The actual map values must each be at least 32 characters. Partner-specific credential exchange and account provisioning must be implemented only against that partner's contracted, certified API specification.

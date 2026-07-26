@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     admin_password_digits: int = 12
     certificate_issuer: str = "terra-vault"
     certificate_signing_key: SecretStr = Field(alias="CERTIFICATE_SIGNING_KEY")
+    baas_data_key: SecretStr | None = Field(default=None, alias="BAAS_DATA_KEY")
+    # JSON map of partner slug to a webhook HMAC secret; keep in a secret manager.
+    baas_webhook_secrets: SecretStr | None = Field(default=None, alias="BAAS_WEBHOOK_SECRETS")
 
     @field_validator("admin_password_seed", "admin_jwt_secret", "certificate_signing_key")
     @classmethod
