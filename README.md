@@ -55,3 +55,14 @@ All denominations are present in `terra_denominations`; admin issuance can creat
 4. `POST /me/certificates/{id}/revoke` immediately blacklists an active certificate. It never moves or destroys vault-held tokens.
 
 The API deliberately has no wallet-address, chain, bridge, export, or withdrawal endpoint.
+
+## Phase 2 — time-denominated economics
+
+`supabase/migrations/20260726010000_terra_economy.sql` adds private, RLS-protected records for the following features. Apply it after the initial vault migration.
+
+- **RWA time quotes:** `POST /admin/economy/quotes` accepts auditable source prices for GOLD, OIL, SILVER, NATGAS, BTC, USD, JPY, PLATINUM, SP500, and APPLE, plus an observed RBH value. The pricing engine clamps RBH to a ±20% boundary around its configured baseline (default 30 USD/RBH), then derives `TRR per unit = source USD price / guarded RBH USD value`. `GET /economy/quotes` exposes the latest derived time quotes.
+- **Staking:** `POST /me/stakes` locks owned vault partitions for 30, 90, 180, or 365 days. The deterministic plans use 1x/2x/4x power multipliers and documented time-denominated rewards. Locked partitions cannot simultaneously fund another stake or position.
+- **Synthetic RWA positions:** `POST /me/positions` opens an internal LONG/SHORT position at 1x, 2x, 5x, 10x, or 20x from a current time quote. Margin, notional, units, liquidation price, P&L, and settlement equity are all TRR/RBH quantities. `POST /me/positions/{id}/close` closes it; it does not create an external withdrawal.
+- **Pension contracts:** users may create 2/5/10-year contracts at a 3%/5%/10% voluntary monthly contribution rate. Each recorded contribution allocates 10% to an immediate **internal payout entitlement** and 90% to capitalized vault savings at the contract rate (8% annual by default, compounded monthly in the projection). `POST /me/pension-contracts/{id}/close` returns all remaining principal internally with zero penalty; already recorded immediate payouts remain paid.
+
+Quotes are inputs from an approved, auditable oracle process—not investment advice or a promise of a market price. The pension projection is a mathematical projection, not a guarantee of return. As in phase 1, none of these modules exposes an external wallet, token withdrawal, bridge, or cash-out route.
