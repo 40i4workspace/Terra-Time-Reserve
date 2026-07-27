@@ -81,3 +81,12 @@ export BAAS_DATA_KEY="$(python -c 'from cryptography.fernet import Fernet; print
 export BAAS_WEBHOOK_SECRETS="$(python -c 'import json,secrets; print(json.dumps({"licensed-provider": secrets.token_urlsafe(48)}))')"
 ```
 The actual map values must each be at least 32 characters. Partner-specific credential exchange and account provisioning must be implemented only against that partner's contracted, certified API specification.
+
+## Phase 4 — simulation protocol and SmartSplit
+
+`supabase/migrations/20260726030000_protocol_governance.sql` adds a bounded, internal-only Oxygenus simulation state and charitable split ledger.
+
+- `POST /admin/protocol/cdco-cycles` records a CDCO cycle only when the observed RBH measure crosses the ±20% boundary. Its bounded pseudo-random amount is committed with HMAC-SHA512, so it is reproducible for auditors holding the server secret. It updates no external wallet and does not create a withdrawal route.
+- `POST /admin/smart-splits` records an exact mathematical 1% infrastructure / 99% GSC allocation. Optional named CHILDCARE, SHELTER, or HOSPITAL allocations cannot exceed the GSC amount. `GET /admin/gsc/allocations` provides the internal audit ledger.
+
+The protocol tables use `NUMERIC(150,72)`: `NUMERIC(100,18)` can hold `10^72` but cannot retain a `10^-72` fractional scale. CDCO, SmartSplit, the multi-asset view, and the economics modules are explicitly simulation/accounting mechanisms; they are not an external token, a payment instrument, a bank account, or a promise of return.

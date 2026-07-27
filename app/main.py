@@ -19,6 +19,7 @@ from .security import (encrypt_certificate, issue_admin_token, require_admin, re
                        verify_admin_password)
 from .settings import Settings, get_settings
 from .baas import encrypt_iban, event_payload, verify_webhook
+from .protocol import cdco_action, smart_split
 
 class AdminLogin(BaseModel):
     username: str
@@ -456,3 +457,59 @@ def fiat_accounts(request: Request, user: UUID = Depends(require_user)):
 # Registered after API routes so /academy/patterns and /academy/history remain APIs.
 from fastapi.staticfiles import StaticFiles
 app.mount("/academy", StaticFiles(directory="frontend", html=True), name="academy-ui")
+
+
+# ---- Oxygenus simulation protocol / SmartSplit ---------------------------------
+class CdcoCycleRequest(BaseModel):
+    cycle_id: str = Field(min_length=8, max_length=120)
+    observed_rbh: str
+class SmartSplitRequest(BaseModel):
+    reference_type: str = Field(min_length=3,max_length=50)
+    reference_id: str = Field(min_length=3,max_length=120)
+    currency: Literal["TRR","USD","EUR","GBP","USDT","PLN","JPY"]
+    gross_amount: str
+    beneficiaries: list[dict] = Field(default_factory=list, max_length=500)
+
+@app.get("/admin/protocol/state")
+def protocol_state(request: Request, _: dict = Depends(require_admin)):
+    with db(request).pool.connection() as conn: row=conn.execute("select total_supply_cap,circulating_supply,target_rbh,updated_at from terra_protocol_state where singleton").fetchone()
+    return {**row, "total_supply_cap":storage(row["total_supply_cap"]),"circulating_supply":storage(row["circulating_supply"]),"target_rbh":storage(row["target_rbh"]),"mode":"SIMULATION_ONLY"}
+
+@app.post("/admin/protocol/cdco-cycles", status_code=201)
+def run_cdco_cycle(body: CdcoCycleRequest, request: Request, s: Annotated[Settings, Depends(settings)], _: dict = Depends(require_admin)):
+    """Record a bounded, reproducible internal supply adjustment when ±20% is crossed."""
+    try:
+        with db(request).transaction() as conn:
+            state=conn.execute("select * from terra_protocol_state where singleton for update").fetchone()
+            action=cdco_action(observed_rbh=body.observed_rbh,target_rbh=state["target_rbh"],circulating_supply=state["circulating_supply"],cycle_id=body.cycle_id,secret=s.admin_jwt_secret.get_secret_value())
+            if action is None: return {"acted":False,"reason":"inside peg safety boundary"}
+            sign = 1 if action.direction == "MINT" else -1
+            updated=__import__('decimal').Decimal(state["circulating_supply"]) + sign*action.amount
+            conn.execute("update terra_protocol_state set circulating_supply=%s,updated_at=now() where singleton",(storage(updated),))
+            row=conn.execute("""insert into terra_cdco_cycles(cycle_id,observed_rbh,target_rbh,deviation,direction,amount,entropy_commitment)
+              values(%s,%s,%s,%s,%s,%s,%s) returning id,occurred_at""",(body.cycle_id,storage(body.observed_rbh),storage(state["target_rbh"]),storage(action.deviation),action.direction,storage(action.amount),action.entropy_commitment)).fetchone()
+    except (ValueError,AmountError) as exc: raise HTTPException(422,detail=str(exc)) from exc
+    return {**row,"acted":True,"direction":action.direction,"amount":storage(action.amount),"deviation":storage(action.deviation),"circulating_supply":storage(updated),"entropy_commitment":action.entropy_commitment}
+
+@app.post("/admin/smart-splits", status_code=201)
+def create_smart_split(body: SmartSplitRequest, request: Request, _: dict = Depends(require_admin)):
+    """Append-only 1/99 infrastructure/GSC split. Beneficiary allocation is bounded to the GSC share."""
+    try:
+        operations,gsc=smart_split(body.gross_amount)
+        with db(request).transaction() as conn:
+            event=conn.execute("""insert into terra_smart_split_events(reference_type,reference_id,currency,gross_amount,operations_amount,gsc_amount)
+              values(%s,%s,%s,%s,%s,%s) returning id,occurred_at""",(body.reference_type,body.reference_id,body.currency,storage(body.gross_amount),storage(operations),storage(gsc))).fetchone()
+            allocations=[]
+            for b in body.beneficiaries:
+                if set(b) != {"beneficiary_id","beneficiary_type","amount"}: raise ValueError("beneficiary must have id, type, and amount")
+                if b["beneficiary_type"] not in {"CHILDCARE","SHELTER","HOSPITAL"}: raise ValueError("invalid beneficiary type")
+                allocations.append((event["id"],b["beneficiary_id"],b["beneficiary_type"],storage(b["amount"])))
+            if allocations and sum((__import__('decimal').Decimal(x[3]) for x in allocations),__import__('decimal').Decimal("0")) > gsc: raise ValueError("allocations exceed GSC share")
+            if allocations: conn.executemany("insert into terra_gsc_allocations(split_event_id,beneficiary_id,beneficiary_type,amount) values(%s,%s,%s,%s::numeric)",allocations)
+    except (ValueError,AmountError) as exc: raise HTTPException(422,detail=str(exc)) from exc
+    return {**event,"gross_amount":storage(body.gross_amount),"operations_amount":storage(operations),"gsc_amount":storage(gsc),"allocation_count":len(body.beneficiaries)}
+
+@app.get("/admin/gsc/allocations")
+def gsc_allocations(request: Request, _: dict = Depends(require_admin)):
+    with db(request).pool.connection() as conn: rows=conn.execute("select a.*,s.currency,s.reference_type,s.reference_id from terra_gsc_allocations a join terra_smart_split_events s on s.id=a.split_event_id order by a.created_at desc").fetchall()
+    return [{**r,"amount":storage(r["amount"])} for r in rows]
