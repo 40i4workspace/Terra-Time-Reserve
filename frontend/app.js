@@ -1,0 +1,4 @@
+const api = location.origin; const token = localStorage.getItem('terra_access_token');
+const headers = token ? {Authorization:`Bearer ${token}`} : {};
+async function patterns(){ const r=await fetch(`${api}/academy/patterns`,{headers}); if(!r.ok)return; const rows=await r.json(); document.querySelector('#patterns').innerHTML=rows.map(x=>`<article><span>${x.risk_level} RISK</span><h3>${x.title}</h3><p>${x.summary}</p><details><summary>Study guide</summary><p>${x.lesson_markdown}</p></details></article>`).join(''); }
+document.querySelector('#load').onclick=async()=>{const asset=document.querySelector('#asset').value; const r=await fetch(`${api}/academy/history/${asset}?timeframe=1W`,{headers}); const target=document.querySelector('#history'); if(!r.ok){target.textContent='No verified history available yet.';return} const x=await r.json(); target.textContent=`${x.length} weekly candles loaded. Historical data is educational, not a trading signal.`}; patterns();
